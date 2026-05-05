@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RFID Control Panel</title>
+    <link href="../library/bootstrap.min.css" rel="stylesheet" />
+    <script src="../library/axios.min.js"></script>
+    <style>
+      .card-rfid {
+        border-radius: 15px;
+        min-height: 40%;
+      }
+      #lastTag {
+        font-family: monospace;
+        font-weight: bold;
+        font-size: 1.2rem;
+      }
+      .scroll-table {
+        max-height: 400px;
+        overflow-y: auto;
+      }
+    </style>
+  </head>
+  <body class="bg-light">
+    <div class="container py-5">
+      <div class="row g-4">
+        <!-- KOLOM KIRI: KONTROL -->
+        <div class="col-md-7">
+          <div class="card shadow-lg p-4 card-rfid">
+            <h4 class="text-center mb-4">RFID Control Interface</h4>
+            <div
+              id="statusIndicator"
+              class="alert alert-secondary text-center fw-bold"
+            >
+              READER DISCONNECTED
+            </div>
+
+            <div class="row g-2">
+              <div class="col-6">
+                <button class="btn btn-primary w-100" id="btnConnect">
+                  Connect
+                </button>
+              </div>
+              <div class="col-6">
+                <button
+                  class="btn btn-danger w-100"
+                  id="btnDisconnect"
+                  disabled
+                >
+                  Disconnect
+                </button>
+              </div>
+              <div class="col-6">
+                <button class="btn btn-success w-100" id="btnStart" disabled>
+                  Start Scan
+                </button>
+              </div>
+              <div class="col-6">
+                <button class="btn btn-warning w-100" id="btnEnd" disabled>
+                  Stop Scan
+                </button>
+              </div>
+            </div>
+
+            <hr class="my-4" />
+
+            <div class="mb-3">
+              <div class="d-flex justify-content-between">
+                <label class="form-label">RF Power (Jarak)</label>
+                <span class="badge bg-primary"
+                  ><span id="powerValue">20</span> dBm</span
+                >
+              </div>
+              <input
+                type="range"
+                class="form-range"
+                id="rangePower"
+                min="0"
+                max="30"
+                value="20"
+              />
+              <button
+                class="btn btn-outline-dark btn-sm w-100 mt-2"
+                id="btnSetPower"
+                disabled
+              >
+                Update Power
+              </button>
+            </div>
+
+            <input
+              type="text"
+              class="form-control mb-3"
+              id="sku"
+              placeholder="Masukkan NO SKU"
+            />
+            <button class="btn btn-primary w-100 mb-3" id="btnSaveData">
+              <i class="fas fa-save"></i> Simpan ke Database
+            </button>
+
+            <div class="scroll-table">
+              <table class="table table-hover border">
+                <thead class="table-dark sticky-top">
+                  <tr>
+                    <th>No</th>
+                    <th>EPC Tag ID</th>
+                  </tr>
+                </thead>
+                <tbody id="inventoryBody">
+                  <tr>
+                    <td colspan="3" class="text-center text-muted">
+                      No tags scanned yet.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- KOLOM KANAN: LIST DATA & TOTAL -->
+        <div class="col-md-5">
+          <div class="card shadow-lg p-4 card-rfid">
+            <div class="mb-3 text-center">
+              <span class="text-muted fw-bold d-block">Total Unique Tags</span>
+              <h2
+                class="m-0 text-primary"
+                id="totalUnique"
+                style="font-size: 150px"
+              >
+                0
+              </h2>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- button link to other page -->
+      <div class="text-center mt-4">
+        <a href="scanner.html" class="btn btn-link">Cek Tags</a>
+      </div>
+    </div>
+
+    <script>
+      const PYTHON_API = "http://localhost:8001";
+
+      const DEVICES = [
+        { ip: "134.244.2.190", port: 6000 },
+        { ip: "134.244.2.116", port: 49152 },
+        { ip: "134.244.2.117", port: 49152 },
+      ];
+
+      let globalScan = false;
+
+      // =====================
+      // UI
+      // =====================
+      const ui = {
+        status: document.getElementById("statusIndicator"),
+        start: document.getElementById("btnStart"),
+        end: document.getElementById("btnEnd"),
+        connect: document.getElementById("btnConnect"),
+        disconnect: document.getElementById("btnDisconnect"),
+        setPower: document.getElementById("btnSetPower"),
+        range: document.getElementById("rangePower"),
+        powerLabel: document.getElementById("powerValue"),
+        inventoryBody: document.getElementById("inventoryBody"),
+        totalUnique: document.getElementById("totalUnique"),
+        sku: document.getElementById("sku"),
+        btnSave: document.getElementById("btnSaveData"),
+      };
+
+      // =====================
+      // STATUS UI
+      // =====================
+      function setConnected(connected) {
+        ui.status.innerText = connected
+          ? "ALL DEVICE CONNECTED"
+          : "DEVICE DISCONNECTED";
+
+        ui.status.className = connected
+          ? "alert alert-success text-center fw-bold"
+          : "alert alert-secondary text-center fw-bold";
+
+        ui.connect.disabled = connected;
+        ui.disconnect.disabled = !connected;
+        ui.start.disabled = !connected || globalScan;
+        ui.end.disabled = !globalScan;
+        ui.setPower.disabled = !connected;
+      }
+
+      // =====================
+      // CONNECT ALL
+      // =====================
+      ui.connect.addEventListener("click", async () => {
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios.post(`${PYTHON_API}/connect`, d).catch(() => {}),
+            ),
+          );
+          setConnected(true);
+        } catch {
+          alert("Connect gagal");
+        }
+      });
+
+      // =====================
+      // DISCONNECT ALL
+      // =====================
+      ui.disconnect.addEventListener("click", async () => {
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios
+                .post(`${PYTHON_API}/disconnect`, { ip: d.ip })
+                .catch(() => {}),
+            ),
+          );
+          setConnected(false);
+        } catch {}
+      });
+
+      // =====================
+      // START ALL
+      // =====================
+      ui.start.addEventListener("click", async () => {
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios
+                .post(`${PYTHON_API}/start-scan`, { ip: d.ip })
+                .catch(() => {}),
+            ),
+          );
+
+          globalScan = true;
+          updateScanButton();
+        } catch {
+          alert("Start gagal");
+        }
+      });
+
+      // =====================
+      // STOP ALL
+      // =====================
+      ui.end.addEventListener("click", async () => {
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios
+                .post(`${PYTHON_API}/stop-scan`, { ip: d.ip })
+                .catch(() => {}),
+            ),
+          );
+
+          globalScan = false;
+          updateScanButton();
+        } catch {}
+      });
+
+      // =====================
+      // SET POWER (SEMUA DEVICE)
+      // =====================
+      ui.setPower.addEventListener("click", async () => {
+        const power = parseInt(ui.range.value);
+
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios
+                .post(`${PYTHON_API}/set-distance`, {
+                  power: power,
+                  ip: d.ip,
+                })
+                .catch(() => {}),
+            ),
+          );
+
+          alert("Power updated");
+        } catch {
+          alert("Failed");
+        }
+      });
+
+      ui.range.addEventListener("input", () => {
+        ui.powerLabel.innerText = ui.range.value;
+      });
+
+      function updateScanButton() {
+        if (globalScan) {
+          ui.start.disabled = true;
+          ui.end.disabled = false;
+        } else {
+          ui.start.disabled = false;
+          ui.end.disabled = true;
+        }
+      }
+
+      ui.btnSave.addEventListener("click", async () => {
+        const skuValue = ui.sku.value.trim();
+
+        // 1. Validasi SKU
+        if (!skuValue) {
+          alert("Silakan masukkan NO SKU terlebih dahulu!");
+          return;
+        }
+
+        try {
+          // 2. Ambil data inventory terbaru dari Python
+          const invRes = await axios.get(`${PYTHON_API}/inventory-all`);
+          const tags = invRes.data.map((item) => item.epc);
+          if (tags.length === 0) {
+            alert("Belum ada data tag yang terscan!");
+            return;
+          }
+
+          // 3. Siapkan data untuk dikirim ke Laravel API
+          // Kita ambil hanya nilai EPC-nya saja
+          // const payload = {
+          //   sku: skuValue,
+          //   tags: scannedTags.map((item) => item.epc),
+          // };
+
+          // console.log(payload);
+
+          // 4. Kirim ke Laravel
+          // Sesuaikan URL ini dengan route di Laravel Anda (contoh: /api/save-rfid-inventory)
+          const laravelResponse = await axios.post(
+            "http://192.168.7.45:3182/api/rfid-scan",
+            {
+              sku: skuValue,
+              tags: tags,
+            },
+          );
+
+          if (laravelResponse.status === 200) {
+            alert("Data berhasil disimpan ke database!");
+
+            // Opsional: Reset form setelah simpan
+            ui.sku.value = "";
+            ui.inventoryBody.innerHTML = `<tr><td colspan="2" class="text-center text-muted">Data saved. Start new scan.</td></tr>`;
+            ui.totalUnique.innerText = "0";
+            setConnected(true);
+          }
+        } catch (err) {
+          console.error("Save Error:", err);
+          alert(
+            "Gagal menyimpan data: " +
+              (err.response?.data?.message || err.error),
+          );
+        }
+      });
+
+      // =====================
+      // POLLING GLOBAL INVENTORY
+      // =====================
+      setInterval(async () => {
+        try {
+          // 🔥 GLOBAL INVENTORY
+          const res = await axios.get(`${PYTHON_API}/inventory-all`);
+          const data = res.data;
+
+          if (data.length > 0) {
+            ui.totalUnique.innerText = data.length;
+
+            ui.inventoryBody.innerHTML = data
+              .map(
+                (item, i) => `
+              <tr>
+                <td>${i + 1}</td>
+                <td class="fw-bold text-monospace">${item.epc}</td>
+              </tr>
+            `,
+              )
+              .join("");
+          } else {
+            ui.inventoryBody.innerHTML = `<tr><td colspan="2" class="text-center">Scanning...</td></tr>`;
+            ui.totalUnique.innerText = "0";
+          }
+
+          // 🔥 CHECK STATUS SEMUA DEVICE
+          const devRes = await axios.get(`${PYTHON_API}/devices`);
+          const active = devRes.data;
+
+          let allConnected = active.length === DEVICES.length;
+          setConnected(allConnected);
+        } catch (err) {
+          console.log("Polling error", err);
+        }
+      }, 1000);
+    </script>
+  </body>
+</html>

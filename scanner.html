@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RFID Control Panel</title>
+
+    <link href="../library/bootstrap.min.css" rel="stylesheet" />
+    <script src="../library/axios.min.js"></script>
+
+    <style>
+      .card-rfid {
+        border-radius: 15px;
+        min-height: 40%;
+      }
+      .scroll-table {
+        max-height: 400px;
+        overflow-y: auto;
+      }
+      .info-box {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 5px;
+        padding: 10px;
+        margin-top: 15px;
+      }
+    </style>
+  </head>
+
+  <body class="bg-light">
+    <div class="px-3 py-5">
+      <div class="row g-4">
+        <!-- LEFT -->
+        <div class="col-md-6">
+          <div class="card p-4 card-rfid">
+            <h4 class="text-center mb-4">RFID Control Interface</h4>
+
+            <input
+              type="text"
+              class="form-control"
+              id="sscc"
+              placeholder="Masukkan NO SSCC"
+            />
+
+            <div class="info-box">
+              <p class="fw-bold">Carton : <span id="cartonValue">-</span></p>
+              <p class="fw-bold">Color : <span id="colorValue">-</span></p>
+              <p class="fw-bold">Size : <span id="sizeValue">-</span></p>
+              <p class="fw-bold">QTY : <span id="qtyValue">0</span></p>
+            </div>
+
+            <!-- RESULT -->
+            <div class="info-box">
+              <p class="fw-bold text-success">
+                TOTAL VALID :
+                <span id="totalValid">0</span> /
+                <span id="targetQty">0</span>
+              </p>
+
+              <p class="fw-bold text-danger">
+                INVALID TAG :
+                <span id="totalInvalid">0</span>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT -->
+        <div class="col-md-6">
+          <div class="card p-4 card-rfid">
+            <h4 class="text-center mb-4">RFID Control Interface</h4>
+
+            <div
+              id="statusIndicator"
+              class="alert alert-secondary text-center fw-bold"
+            >
+              READER DISCONNECTED
+            </div>
+
+            <div class="row g-2">
+              <div class="col-6">
+                <button class="btn btn-primary w-100" id="btnConnect">
+                  Connect
+                </button>
+              </div>
+              <div class="col-6">
+                <button
+                  class="btn btn-danger w-100"
+                  id="btnDisconnect"
+                  disabled
+                >
+                  Disconnect
+                </button>
+              </div>
+              <div class="col-6">
+                <button class="btn btn-success w-100" id="btnStart" disabled>
+                  Start Scan
+                </button>
+              </div>
+              <div class="col-6">
+                <button class="btn btn-warning w-100" id="btnEnd" disabled>
+                  Stop Scan
+                </button>
+              </div>
+            </div>
+
+            <hr class="my-4" />
+
+            <div class="scroll-table">
+              <table class="table table-hover border">
+                <thead class="table-dark sticky-top">
+                  <tr>
+                    <th>No</th>
+                    <th>EPC</th>
+                    <th>SKU</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="inventoryBody">
+                  <tr>
+                    <td colspan="4" class="text-center text-muted">
+                      No tags scanned yet.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const PYTHON_API = "http://localhost:8001";
+      const LARAVEL_API = "http://192.168.7.45:3182/api";
+
+      const DEVICES = [
+        { ip: "134.244.2.190", port: 6000 },
+        { ip: "134.244.2.116", port: 49152 },
+        { ip: "134.244.2.117", port: 49152 },
+      ];
+
+      let globalScan = false;
+      let activeSSCC = null;
+      let targetSKU = null;
+
+      // UI
+      const ui = {
+        ssccInput: document.getElementById("sscc"),
+        carton: document.getElementById("cartonValue"),
+        color: document.getElementById("colorValue"),
+        size: document.getElementById("sizeValue"),
+        qty: document.getElementById("qtyValue"),
+
+        totalValid: document.getElementById("totalValid"),
+        totalInvalid: document.getElementById("totalInvalid"),
+        targetQty: document.getElementById("targetQty"),
+
+        status: document.getElementById("statusIndicator"),
+        start: document.getElementById("btnStart"),
+        end: document.getElementById("btnEnd"),
+        connect: document.getElementById("btnConnect"),
+        disconnect: document.getElementById("btnDisconnect"),
+        inventoryBody: document.getElementById("inventoryBody"),
+      };
+
+      // =====================
+      // STATUS
+      // =====================
+      function setConnected(connected) {
+        ui.status.innerText = connected
+          ? "ALL DEVICE CONNECTED"
+          : "DEVICE DISCONNECTED";
+
+        ui.status.className = connected
+          ? "alert alert-success text-center fw-bold"
+          : "alert alert-secondary text-center fw-bold";
+
+        ui.connect.disabled = connected;
+        ui.disconnect.disabled = !connected;
+        ui.start.disabled = !connected || globalScan;
+        ui.end.disabled = !globalScan;
+      }
+
+      function updateScanButton() {
+        ui.start.disabled = globalScan;
+        ui.end.disabled = !globalScan;
+      }
+
+      // =====================
+      // CONNECT
+      // =====================
+      ui.connect.addEventListener("click", async () => {
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios.post(`${PYTHON_API}/connect`, d).catch(() => {}),
+            ),
+          );
+          setConnected(true);
+        } catch {
+          alert("Connect gagal");
+        }
+      });
+
+      // =====================
+      // DISCONNECT
+      // =====================
+      ui.disconnect.addEventListener("click", async () => {
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios
+                .post(`${PYTHON_API}/disconnect`, { ip: d.ip })
+                .catch(() => {}),
+            ),
+          );
+          setConnected(false);
+        } catch {}
+      });
+
+      // =====================
+      // START
+      // =====================
+      ui.start.addEventListener("click", async () => {
+        if (!activeSSCC) {
+          alert("Masukkan SSCC terlebih dahulu!");
+          return;
+        }
+
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios
+                .post(`${PYTHON_API}/start-scan`, { ip: d.ip })
+                .catch(() => {}),
+            ),
+          );
+
+          globalScan = true;
+          updateScanButton();
+        } catch {
+          alert("Start gagal");
+        }
+      });
+
+      // =====================
+      // STOP
+      // =====================
+      ui.end.addEventListener("click", async () => {
+        try {
+          await Promise.all(
+            DEVICES.map((d) =>
+              axios
+                .post(`${PYTHON_API}/stop-scan`, { ip: d.ip })
+                .catch(() => {}),
+            ),
+          );
+
+          globalScan = false;
+          updateScanButton();
+        } catch {}
+      });
+
+      // =====================
+      // INPUT SSCC
+      // =====================
+      ui.ssccInput.addEventListener("keypress", async (e) => {
+        if (e.key === "Enter") {
+          const q = e.target.value.trim();
+          if (!q) return;
+
+          try {
+            const res = await axios.get(`${LARAVEL_API}/search-sscc?q=${q}`);
+            const data = res.data;
+
+            activeSSCC = q;
+            targetSKU = data.carton_info.sku;
+
+            ui.carton.innerText = data.carton_info.carton_no;
+            ui.color.innerText = data.carton_info.color;
+            ui.size.innerText = data.carton_info.size;
+            ui.qty.innerText = data.carton_info.target;
+            ui.targetQty.innerText = data.carton_info.target;
+
+            // reset counter
+            ui.totalValid.innerText = "0";
+            ui.totalInvalid.innerText = "0";
+
+            ui.inventoryBody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">Ready to scan...</td></tr>`;
+          } catch {
+            alert("SSCC tidak ditemukan!");
+          }
+        }
+      });
+
+      // =====================
+      // POLLING
+      // =====================
+      setInterval(async () => {
+        if (!globalScan) return;
+
+        try {
+          const res = await axios.get(`${PYTHON_API}/inventory-all`);
+          const epcs = res.data.map((i) => i.epc);
+
+          if (epcs.length === 0) return;
+
+          const validated = await axios.post(`${LARAVEL_API}/validate-epc`, {
+            epcs: epcs,
+            target_sku: targetSKU,
+          });
+
+          const list = validated.data;
+
+          let validCount = 0;
+          let invalidCount = 0;
+
+          list.forEach((item) => {
+            if (item.status === "VALID") validCount++;
+            else invalidCount++;
+          });
+
+          ui.totalValid.innerText = validCount;
+          ui.totalInvalid.innerText = invalidCount;
+
+          ui.inventoryBody.innerHTML = list
+            .map(
+              (item, i) => `
+      <tr class="${item.status === "VALID" ? "table-success" : "table-danger"}">
+        <td>${i + 1}</td>
+        <td>${item.epc}</td>
+        <td>${item.sku ?? "-"}</td>
+        <td>${item.status}</td>
+      </tr>
+    `,
+            )
+            .join("");
+        } catch {}
+      }, 1000);
+    </script>
+  </body>
+</html>
